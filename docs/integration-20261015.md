@@ -30,4 +30,4 @@ Playlist会在构造阶段替换输入handler；两菜单在字段初始化完�
 
 原muxi-auth/music-compat已从活动目录移到总仓私有 .local-operations/retired-music-compat-20261015；1162文件移动前后逐SHA核验，旧history/logs及未提交源码均保留。新源/QA/离线测试在本仓，旧Auth构建入口已转发到本仓tools。Auth app、凭据、后端测试与旧 .local-validation 证据未移走。后续只维护本fork，不恢复第二份活动游戏端源码。
 
-编号环境使用test-environment外层resources/toolchains/cache，client-N仅保存独立运行数据。优先复用空闲环境、忙时才新增；本轮暴露历史owner缺进程创建时间可能误判占用，统一工具另行修复并记录于总仓手册，不能把新建client-3解释为必须每轮新建环境。
+编号环境使用test-environment外层resources/toolchains/cache，client-N仅保存独立运行数据。优先复用空闲环境、忙时才新增；本轮暴露历史owner缺进程创建时间可能误判占用，统一工具已改为记录真实进程创建时间、核验完整正常结束证据；11项针对回归及实际优先复用client-2验证通过，记录于总仓手册，不能把新建client-3解释为必须每轮新建环境。

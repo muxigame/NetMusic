@@ -6,4 +6,4 @@
 - 本仓直接编译 NetMusic 源码，独立 music-compat 已迁入。不能重新同时装原 NetMusic 与 fork，也不能重新引入独立 muxi_music_compat 模组。
 - 保留已有网络消息/NBT key；内部 Java 旧包名是兼容接口，不代表仍依赖另一个模组。Minecraft/Playlist 外部桥接与自身源码逻辑要区分。
 - 新版本构建输出使用新目录，保存源码/依赖/资源与产物 SHA。QA JAR 不发给玩家。账号后端在兄弟 muxi-auth，凭据/曲库/测试存档不进本仓。
-- 原生测试只允许父仓 test-environment/runs，资源/toolchains/cache同父约定；关闭后确认exit0、端口和世界锁释放。发布另按当次授权。
+- 原生测试通过父仓统一分配器优先复用 test-environment/client-N/runs，所有环境占用时才新增编号；resources/toolchains/cache放外层共用，旧runs保留历史停机兼容；关闭后确认exit0、端口和世界锁释放。发布另按当次授权。
