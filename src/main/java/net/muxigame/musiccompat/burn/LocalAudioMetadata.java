@@ -1,0 +1,34 @@
+package net.muxigame.musiccompat.burn;
+import java.io.*;import java.nio.charset.*;import java.nio.file.*;import java.util.*;
+/** Bounded tags only: ID3v1/v2, RIFF INFO, FLAC/Vorbis, Ogg Vorbis and MP4 ilst. */
+public final class LocalAudioMetadata {
+ private static final int LIMIT=1024*1024;
+ private LocalAudioMetadata(){}
+ private static final class Tags {String title="",artist="";void accept(String key,String value){if(value==null||value.isBlank())return;switch(key.toUpperCase(Locale.ROOT)){case "TITLE","TIT2","TT2","INAM"->title=value;case "ARTIST","ALBUMARTIST","TPE1","TP1","IART"->artist=value;}}}
+ public static SongMetadata read(Path file,String fallback){Tags tags=new Tags();try(RandomAccessFile in=new RandomAccessFile(file.toFile(),"r")){
+  byte[] header=new byte[(int)Math.min(12,in.length())];in.readFully(header);String magic=new String(header,StandardCharsets.ISO_8859_1);
+  if(magic.startsWith("ID3"))id3(in,header,tags);
+  if(magic.startsWith("fLaC"))flac(in,tags);
+  if(magic.startsWith("RIFF")&&magic.endsWith("WAVE"))riff(in,tags);
+  if(magic.startsWith("OggS"))ogg(in,tags);
+  if(magic.length()>=8&&magic.substring(4,8).equals("ftyp"))atoms(in,0,in.length(),0,tags);
+  if(in.length()>=128&&tags.title.isBlank()){in.seek(in.length()-128);byte[] last=new byte[128];in.readFully(last);if(new String(last,0,3,StandardCharsets.ISO_8859_1).equals("TAG")){tags.accept("TITLE",trim(last,3,30,StandardCharsets.ISO_8859_1));tags.accept("ARTIST",trim(last,33,30,StandardCharsets.ISO_8859_1));}}
+ }catch(IOException|RuntimeException malformed){}return new SongMetadata(tags.title.isBlank()?fallback:tags.title,tags.artist);}
+ private static String trim(byte[] data,int start,int length,Charset charset){String value=new String(data,start,length,charset);int end=value.indexOf(0);return (end<0?value:value.substring(0,end)).strip();}
+ private static int sync(byte[] b,int offset){return ((b[offset]&127)<<21)|((b[offset+1]&127)<<14)|((b[offset+2]&127)<<7)|(b[offset+3]&127);}
+ private static int big(byte[] b,int offset){return ((b[offset]&255)<<24)|((b[offset+1]&255)<<16)|((b[offset+2]&255)<<8)|(b[offset+3]&255);}
+ private static int little(byte[] b,int offset){return Integer.reverseBytes(big(b,offset));}
+ private static String text(byte[] data,int offset,int size){if(size<1)return "";int mode=data[offset]&255;Charset charset=switch(mode){case 1->StandardCharsets.UTF_16;case 2->StandardCharsets.UTF_16BE;case 3->StandardCharsets.UTF_8;default->StandardCharsets.ISO_8859_1;};return trim(data,offset+1,size-1,charset);}
+ private static void id3(RandomAccessFile in,byte[] header,Tags tags)throws IOException{
+  int version=header[3]&255,size=sync(header,6);if(version<2||version>4||size<0||size>LIMIT||10L+size>in.length()||(header[5]&0xc0)!=0)return;
+  byte[] data=new byte[size];in.seek(10);in.readFully(data);int at=0;while(at+(version==2?6:10)<=size){int frameHeader=version==2?6:10;String id=new String(data,at,version==2?3:4,StandardCharsets.ISO_8859_1);int count=version==2?((data[at+3]&255)<<16)|((data[at+4]&255)<<8)|(data[at+5]&255):version==4?sync(data,at+4):big(data,at+4);if(count<=0||count>size-at-frameHeader)break;
+   if(version==2||(data[at+9]&0xff)==0)tags.accept(id,text(data,at+frameHeader,count));at+=frameHeader+count;}
+ }
+ private static void comments(byte[] data,int at,Tags tags){if(at+4>data.length)return;int vendor=little(data,at);at+=4;if(vendor<0||vendor>data.length-at-4)return;at+=vendor;int count=little(data,at);at+=4;if(count<0||count>10000)return;for(int i=0;i<count&&at+4<=data.length;i++){int size=little(data,at);at+=4;if(size<0||size>data.length-at)return;String field=new String(data,at,size,StandardCharsets.UTF_8);int split=field.indexOf('=');if(split>0)tags.accept(field.substring(0,split),field.substring(split+1));at+=size;}}
+ private static void flac(RandomAccessFile in,Tags tags)throws IOException{in.seek(4);for(int blocks=0;blocks<128&&in.getFilePointer()+4<=in.length();blocks++){int kind=in.readUnsignedByte();int size=(in.readUnsignedByte()<<16)|(in.readUnsignedByte()<<8)|in.readUnsignedByte();if(size>in.length()-in.getFilePointer())return;if((kind&127)==4&&size<=LIMIT){byte[] data=new byte[size];in.readFully(data);comments(data,0,tags);}else in.seek(in.getFilePointer()+size);if((kind&128)!=0)return;}}
+ private static void riff(RandomAccessFile in,Tags tags)throws IOException{in.seek(12);for(int chunks=0;chunks<1024&&in.getFilePointer()+8<=in.length();chunks++){byte[] id=new byte[4];in.readFully(id);long size=Integer.toUnsignedLong(Integer.reverseBytes(in.readInt()));long end=in.getFilePointer()+size;if(end>in.length())return;if(new String(id,StandardCharsets.ISO_8859_1).equals("LIST")&&size<=LIMIT&&size>=4){byte[] data=new byte[(int)size];in.readFully(data);if(new String(data,0,4,StandardCharsets.ISO_8859_1).equals("INFO")){int at=4;while(at+8<=data.length){String key=new String(data,at,4,StandardCharsets.ISO_8859_1);int count=little(data,at+4);at+=8;if(count<0||count>data.length-at)break;tags.accept(key,trim(data,at,count,StandardCharsets.UTF_8));at+=count+(count&1);}}}in.seek(Math.min(in.length(),end+(size&1)));}}
+ private static void ogg(RandomAccessFile in,Tags tags)throws IOException{in.seek(0);ByteArrayOutputStream packet=new ByteArrayOutputStream();int bytes=0;for(int pages=0;pages<128&&bytes<LIMIT&&in.getFilePointer()+27<=in.length();pages++){byte[] header=new byte[27];in.readFully(header);if(!new String(header,0,4,StandardCharsets.ISO_8859_1).equals("OggS"))return;int count=header[26]&255;byte[] laces=new byte[count];in.readFully(laces);for(byte lace:laces){int length=lace&255;if(bytes+length>LIMIT)return;byte[] part=new byte[length];in.readFully(part);packet.writeBytes(part);bytes+=length;if(length<255){byte[] p=packet.toByteArray();if(p.length>=7&&p[0]==3&&new String(p,1,6,StandardCharsets.ISO_8859_1).equals("vorbis")){comments(p,7,tags);return;}packet.reset();}}}}
+ private static void atoms(RandomAccessFile in,long start,long end,int depth,Tags tags)throws IOException{if(depth>8)return;long at=start;for(int count=0;count<1024&&at+8<=end;count++){in.seek(at);long size=Integer.toUnsignedLong(in.readInt());int type=in.readInt();long head=8;if(size==1){size=in.readLong();head=16;}else if(size==0)size=end-at;if(size<head||size>end-at)return;long body=at+head,next=at+size;
+  if(type==0x6d6f6f76||type==0x75647461||type==0x6d657461||type==0x696c7374)atoms(in,body+(type==0x6d657461?4:0),next,depth+1,tags);
+  else if(type==0xa96e616d||type==0xa9415254||type==0x61415254){in.seek(body);if(body+16<=next){long sub=Integer.toUnsignedLong(in.readInt());int data=in.readInt();if(data==0x64617461&&sub>=16&&sub<=next-body&&sub<=LIMIT){in.skipBytes(8);byte[] value=new byte[(int)sub-16];in.readFully(value);tags.accept(type==0xa96e616d?"TITLE":"ARTIST",new String(value,StandardCharsets.UTF_8));}}}at=next;}}
+}

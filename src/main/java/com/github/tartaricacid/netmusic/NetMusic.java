@@ -37,5 +37,6 @@ public class NetMusic {
 
         // 尽可能早的注册精妙背包兼容
         SBackpackCompat.register();
+        net.muxigame.musiccompat.IntegratedMusic.register(modEventBus);
     }
 }

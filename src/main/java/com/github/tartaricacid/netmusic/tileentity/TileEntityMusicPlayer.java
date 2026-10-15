@@ -40,6 +40,7 @@ public class TileEntityMusicPlayer extends BlockEntity {
     private static final String SIGNAL_TAG = "RedStoneSignal";
     private final ItemStackHandler playerInv = new MusicPlayerInv(this);
     private boolean isPlay = false;
+    private final net.muxigame.musiccompat.burn.PlaybackLifecycle.Generation playbackGeneration = new net.muxigame.musiccompat.burn.PlaybackLifecycle.Generation();
     private int currentTime;
     private boolean hasSignal = false;
 
@@ -98,6 +99,7 @@ public class TileEntityMusicPlayer extends BlockEntity {
     }
 
     public void setPlay(boolean play) {
+        if (!play && getClass() == TileEntityMusicPlayer.class) playbackGeneration.invalidate();
         isPlay = play;
     }
 
@@ -105,7 +107,20 @@ public class TileEntityMusicPlayer extends BlockEntity {
         if (level instanceof ServerLevel serverLevel) {
             MinecraftServer server = serverLevel.getServer();
             ItemMusicCD.SongInfo clone = info.clone();
+            boolean standard = getClass() == TileEntityMusicPlayer.class;
+            if (standard) playbackGeneration.invalidate();
+            ItemStack disc = playerInv.getStackInSlot(0);
+            ItemStack snapshot = disc.copy();
+            var ticket = standard && net.muxigame.musiccompat.burn.BurnProtocol.media(info.songUrl)
+                    ? playbackGeneration.begin(level, this, disc, info.songUrl) : null;
             MusicPlayResolverManager.resolve(clone).thenAcceptAsync(resolved -> {
+                if (ticket != null) {
+                    ItemStack currentDisc = playerInv.getStackInSlot(0);
+                    var song = ItemMusicCD.getSongInfo(currentDisc);
+                    boolean present = level != null && level.hasChunkAt(worldPosition) && level.getBlockEntity(worldPosition) == this;
+                    if (!playbackGeneration.current(ticket, level, this, currentDisc, song == null ? null : song.songUrl,
+                            isRemoved(), present, ItemStack.matches(snapshot, currentDisc))) return;
+                }
                 this.setCurrentTime(resolved.songTime * 20 + 64);
                 this.isPlay = true;
                 this.markDirty();
@@ -116,7 +131,8 @@ public class TileEntityMusicPlayer extends BlockEntity {
                         worldPosition, url, rawUrl,
                         resolved.songTime, resolved.songName
                 );
-                NetworkHandler.sendToNearby(level, worldPosition, msg);
+                if (!net.muxigame.musiccompat.burn.PlaybackServer.start(level, worldPosition, msg))
+                    NetworkHandler.sendToNearby(level, worldPosition, msg);
             }, server);
         }
     }

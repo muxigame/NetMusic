@@ -64,6 +64,17 @@ public class NetWorker {
     }
 
     public static <T> HttpResponse<T> send(HttpRequest request, HttpResponse.BodyHandler<T> bodyHandler) throws IOException {
+        if (net.muxigame.musiccompat.burn.BurnProtocol.media(request.uri().toString())) {
+            try {
+                @SuppressWarnings("unchecked") HttpResponse<T> response = (HttpResponse<T>)(HttpResponse<?>)net.muxigame.musiccompat.burn.PrivatePlayback.stream(request);
+                return response;
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException("private_audio_interrupted");
+            } catch (Exception e) {
+                throw new IOException("private_audio_unavailable");
+            }
+        }
         try {
             return HTTP_CLIENT.send(request, bodyHandler);
         } catch (InterruptedException e) {

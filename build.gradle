@@ -260,3 +260,19 @@ idea {
         downloadJavadoc = true
     }
 }
+
+// Native runs belong to the workspace test-environment, never this checkout.
+tasks.configureEach {
+    if (name.startsWith('run')) {
+        doFirst { throw new GradleException('Use qa/entry042/run_current.py with workspace test-environment/runs') }
+    }
+}
+
+// The integrated fork has one pinned, audited source build entrypoint.
+tasks.configureEach {
+    if (name in ['build', 'assemble', 'shadowJar', 'jar', 'compileJava']) {
+        doFirst {
+            throw new GradleException('Integrated fork: use python -B tools/build_candidate.py --output <NEW_DIRECTORY> --better-login-jar <PINNED_JAR> --core-jar <PINNED_JAR>; see README.md')
+        }
+    }
+}

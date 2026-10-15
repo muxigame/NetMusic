@@ -1,5 +1,10 @@
 package com.github.tartaricacid.netmusic.client.gui;
 
+import net.minecraft.client.gui.Font;
+import net.minecraft.client.gui.components.CycleButton;
+import net.minecraft.network.chat.FormattedText;
+import net.muxigame.musiccompat.burn.BurnCoordinator;
+import net.muxigame.musiccompat.burn.BurnScreenRuntime;
 import com.github.tartaricacid.netmusic.NetMusic;
 import com.github.tartaricacid.netmusic.inventory.ComputerMenu;
 import com.github.tartaricacid.netmusic.item.ItemMusicCD;
@@ -45,14 +50,16 @@ public class ComputerMenuScreen extends AbstractContainerScreen<ComputerMenu> {
 
     @Override
     protected void init() {
+        muxiBurn$preserveUrl();
         super.init();
         this.initUrlEditBox();
         this.initNameEditBox();
         this.initTimeEditBox();
         this.readOnlyButton = Checkbox.builder(Component.translatable("gui.netmusic.cd_burner.read_only"), font).pos(leftPos + 58, topPos + 55).maxWidth(80).selected(false).build();
         this.addRenderableWidget(this.readOnlyButton);
-        this.addRenderableWidget(Button.builder(Component.translatable("gui.netmusic.cd_burner.craft"), (b) -> handleCraftButton())
+        this.addRenderableWidget(Button.builder(Component.translatable("gui.netmusic.cd_burner.craft"), (b) -> muxiBurn$link())
                 .pos(leftPos + 7, topPos + 78).size(135, 18).build());
+        muxiBurn$init();
     }
 
     private void initUrlEditBox() {
@@ -106,58 +113,9 @@ public class ComputerMenuScreen extends AbstractContainerScreen<ComputerMenu> {
         this.addWidget(this.timeTextField);
     }
 
+    /** Kept as an addon/QA ABI; the actual widget calls the verified path directly. */
     private void handleCraftButton() {
-        ItemStack cd = this.getMenu().getInput().getStackInSlot(0);
-        if (cd.isEmpty()) {
-            this.tips = Component.translatable("gui.netmusic.cd_burner.cd_is_empty");
-            return;
-        }
-        ItemMusicCD.SongInfo songInfo = ItemMusicCD.getSongInfo(cd);
-        if (songInfo != null && songInfo.readOnly) {
-            this.tips = Component.translatable("gui.netmusic.cd_burner.cd_read_only");
-            return;
-        }
-        String urlText = urlTextField.getValue();
-        if (StringUtils.isBlank(urlText)) {
-            this.tips = Component.translatable("gui.netmusic.computer.url.empty");
-            return;
-        }
-        String nameText = nameTextField.getValue();
-        if (StringUtils.isBlank(nameText)) {
-            this.tips = Component.translatable("gui.netmusic.computer.name.empty");
-            return;
-        }
-        String timeText = timeTextField.getValue();
-        if (StringUtils.isBlank(timeText)) {
-            this.tips = Component.translatable("gui.netmusic.computer.time.empty");
-            return;
-        }
-        if (!TIME_REG.matcher(timeText).matches()) {
-            this.tips = Component.translatable("gui.netmusic.computer.time.not_number");
-            return;
-        }
-        int time = Integer.parseInt(timeText);
-        if (URL_HTTP_REG.matcher(urlText).matches()) {
-            ItemMusicCD.SongInfo song = new ItemMusicCD.SongInfo(urlText, nameText, time, this.readOnlyButton.selected());
-            NetworkHandler.sendToServer(new SetMusicIDMessage(song));
-            return;
-        }
-        if (URL_FILE_REG.matcher(urlText).matches()) {
-            File file = Paths.get(urlText).toFile();
-            if (!file.isFile()) {
-                this.tips = Component.translatable("gui.netmusic.computer.url.local_file_error");
-                return;
-            }
-            try {
-                URL url = file.toURI().toURL();
-                ItemMusicCD.SongInfo song = new ItemMusicCD.SongInfo(url.toString(), nameText, time, this.readOnlyButton.selected());
-                NetworkHandler.sendToServer(new SetMusicIDMessage(song));
-                return;
-            } catch (MalformedURLException e) {
-                NetMusic.LOGGER.error("Failed to convert file path to URL: {}", urlText, e);
-            }
-        }
-        this.tips = Component.translatable("gui.netmusic.computer.url.error");
+        muxiBurn$link();
     }
 
     @Override
@@ -186,8 +144,9 @@ public class ComputerMenuScreen extends AbstractContainerScreen<ComputerMenu> {
         if (StringUtils.isBlank(timeTextField.getValue()) && !timeTextField.isFocused()) {
             graphics.drawString(font, Component.translatable("gui.netmusic.computer.time.tips").withStyle(ChatFormatting.ITALIC), this.leftPos + 11, this.topPos + 61, ChatFormatting.GRAY.getColor(), false);
         }
-        graphics.drawWordWrap(font, tips, this.leftPos + 8, this.topPos + 100, 162, 0xCF0000);
+        muxiBurn$status(graphics, font, tips, this.leftPos + 8, this.topPos + 100, 162, 0xCF0000);
         renderTooltip(graphics, x, y);
+        muxiBurn$detail(graphics, x, y, partialTicks);
     }
 
     @Override
@@ -241,5 +200,147 @@ public class ComputerMenuScreen extends AbstractContainerScreen<ComputerMenu> {
             this.nameTextField.insertText(text);
             this.timeTextField.insertText(text);
         }
+    }
+
+    // Integrated verified burn UI: no injection into NetMusic classes.
+
+    private BurnCoordinator muxiBurn$job;
+    private Button muxiBurn$login;
+    private Button muxiBurn$cancel;
+    private CycleButton<String> muxiBurn$source;
+    private final java.util.Map<Button,Boolean> muxiBurn$disabled=new java.util.IdentityHashMap<>();
+    private String muxiBurn$restoreUrl;
+    private Boolean muxiBurn$restoreReadOnly;
+    private BurnScreenRuntime.Session muxiBurn$session;
+    private boolean muxiBurn$closed;
+    private boolean muxiBurn$choosing;
+    private long muxiBurn$screenGeneration;
+    private Button muxiBurn$localButton;
+    private BurnScreenRuntime.TipBox muxiBurn$occupied;
+    private Component muxiBurn$detail;
+    private String muxiBurn$detailSummary="";
+    private int muxiBurn$statusX,muxiBurn$statusY,muxiBurn$statusWidth;
+
+    private void muxiBurn$preserveUrl() {
+        muxiBurn$restoreUrl=urlTextField==null?null:urlTextField.getValue();
+        muxiBurn$restoreReadOnly=readOnlyButton==null?null:readOnlyButton.selected();
+    }
+
+    private void muxiBurn$init() {
+        // A resize/recovery reinitializes the same open menu. Keep its pending
+        // native selection alive; removed() invalidates genuinely old menus.
+        if(muxiBurn$closed||muxiBurn$screenGeneration==0){muxiBurn$screenGeneration++;muxiBurn$choosing=false;}
+        muxiBurn$closed=false;
+        muxiBurn$session=BurnScreenRuntime.session();
+        if(muxiBurn$session==null)return;
+        var controls=BurnScreenRuntime.computerControls(width,height,leftPos,topPos,imageWidth,imageHeight);
+        muxiBurn$occupied=controls.occupied();
+        // Upstream EditBox defaults to 32: preserve full platform URL and local URI.
+        urlTextField.setMaxLength(2048);
+        if(muxiBurn$restoreUrl!=null)urlTextField.setValue(muxiBurn$restoreUrl);
+        muxiBurn$restoreUrl=null;
+        if(muxiBurn$restoreReadOnly!=null&&readOnlyButton.selected()!=muxiBurn$restoreReadOnly)readOnlyButton.onPress();muxiBurn$restoreReadOnly=null;
+        nameTextField.setMaxLength(120);nameTextField.setEditable(false);nameTextField.setHint(Component.literal("自动获取歌名"));
+        String savedTitle=muxiBurn$session.title(this);
+        if(!savedTitle.isBlank())nameTextField.setValue(savedTitle);
+        timeTextField.setFilter(value->true);timeTextField.setValue("自动");timeTextField.setEditable(false);
+        addRenderableWidget(Checkbox.builder(Component.literal("确认"),font).pos(controls.permission().x(),controls.permission().y()).maxWidth(controls.permission().width()).selected(muxiBurn$session.permissionConfirmed(this)).onValueChange((box,value)->muxiBurn$session.confirmation(this,value)).build());
+        muxiBurn$login=addRenderableWidget(Button.builder(Component.literal("登录"),button->muxiBurn$session.login(this,urlTextField.getValue())).bounds(controls.login().x(),controls.login().y(),controls.login().width(),20).build());
+        if(muxiBurn$job==null) muxiBurn$job=muxiBurn$session.open(this,
+            progress -> {if(!muxiBurn$closed){tips=BurnScreenRuntime.text(progress);muxiBurn$detailSummary=tips.getString();muxiBurn$detail=BurnScreenRuntime.detail(progress);}});
+        if(muxiBurn$job.running()){
+            boolean frozen=muxiBurn$session.readOnlySelected(this);
+            if(readOnlyButton.selected()!=frozen)readOnlyButton.onPress();
+            String input=muxiBurn$session.activeInput(this);if(!input.isBlank())urlTextField.setValue(input);
+        }
+        muxiBurn$localButton=addRenderableWidget(Button.builder(Component.literal("本地刻录"),button -> {
+            if(muxiBurn$choosing)return;
+
+            if(!muxiBurn$session.permissionConfirmed(this)){tips=Component.literal("请确认刻录");return;}
+            var original=this;
+            long selectionGeneration=muxiBurn$screenGeneration;
+            muxiBurn$choosing=true;button.active=false;
+            try {
+                boolean started=muxiBurn$session.chooseLocalOnce(selected -> Minecraft.getInstance().execute(() -> {
+                    if(!BurnScreenRuntime.selectionCurrent(selectionGeneration,muxiBurn$screenGeneration,
+                            muxiBurn$closed,Minecraft.getInstance().screen==original))return;
+                    muxiBurn$choosing=false;if(muxiBurn$localButton!=null)muxiBurn$localButton.active=true;
+                    if(selected==null){tips=Component.empty();return;}
+
+                    muxiBurn$start(muxiBurn$session.local(this,selected));
+                }));
+                if(!started){muxiBurn$choosing=false;button.active=true;tips=Component.literal("文件选择器已打开");}
+            } catch(RuntimeException unavailable) {
+                muxiBurn$choosing=false;button.active=true;tips=Component.literal("文件选择器暂不可用");
+            }
+        }).bounds(controls.local().x(),controls.local().y(),controls.local().width(),20).build());
+        muxiBurn$localButton.active=!muxiBurn$choosing;
+        muxiBurn$cancel=addRenderableWidget(Button.builder(Component.literal("取消刻录"),button -> muxiBurn$job.cancel())
+            .bounds(controls.cancel().x(),controls.cancel().y(),controls.cancel().width(),20).build());
+        muxiBurn$source=addRenderableWidget(CycleButton.<String>builder(value->Component.literal(switch(value){
+            case "qq_music" -> "QQ音乐";case "bilibili" -> "B站";default -> "网易";}))
+            .withValues(java.util.List.of("netease","qq_music","bilibili"))
+            .withInitialValue(muxiBurn$session.sourceType(this)).displayOnlyValue()
+            .create(controls.source().x(),controls.source().y(),controls.source().width(),20,Component.literal("音乐源"),
+                (button,value)->muxiBurn$session.sourceType(this,value)));
+    }
+    private void muxiBurn$link() {
+        if(muxiBurn$session==null){tips=Component.literal("音乐服务尚未就绪");return;}
+        if(muxiBurn$choosing){tips=Component.literal("请先完成文件选择");return;}
+
+        if(!muxiBurn$session.prepareLink(this,urlTextField.getValue()))return;
+        if(!muxiBurn$session.permissionConfirmed(this)){tips=Component.literal("请确认刻录");return;}
+        try {muxiBurn$start(muxiBurn$session.link(this,urlTextField.getValue()));}
+        catch(RuntimeException invalid){tips=Component.literal("音频链接无效");}
+    }
+    private void muxiBurn$start(BurnCoordinator.Source source) {
+        muxiBurn$session.readOnly(this,readOnlyButton.selected());
+        try {muxiBurn$job.start(source,muxiBurn$session.commit(this));}
+        catch(IllegalStateException busy){tips=Component.literal("正在刻录，请等待或取消");}
+    }
+    @Override public void removed() {
+        muxiBurn$closed=true;muxiBurn$screenGeneration++;muxiBurn$choosing=false;
+        muxiBurn$job=null;if(muxiBurn$session!=null)muxiBurn$session.closed(this);super.removed();
+    }
+    /** Pinned upstream renders tips at left+8/top+57, width135, immediately
+     * above the platform buttons at top+70. Replacing its wrap keeps one row.
+     */
+    private void muxiBurn$status(GuiGraphics graphics,Font currentFont,FormattedText text,int x,int y,int rowWidth,int color) {
+        String full=text.getString();
+        if(!full.equals(muxiBurn$detailSummary)){muxiBurn$detailSummary=full;muxiBurn$detail=Component.literal(full);}
+        muxiBurn$statusX=x;muxiBurn$statusY=y;muxiBurn$statusWidth=rowWidth;
+        graphics.drawString(currentFont,BurnScreenRuntime.singleLine(full,rowWidth,currentFont::width),x,y,color,false);
+    }
+    private void muxiBurn$detail(GuiGraphics graphics,int mouseX,int mouseY,float delta) {
+        boolean busy=muxiBurn$job!=null&&muxiBurn$job.running();
+        for(var child:children())if(child instanceof Button button&&button!=muxiBurn$cancel&&!BurnScreenRuntime.closeControl(button.getMessage().getString())){
+            if(busy){muxiBurn$disabled.putIfAbsent(button,button.active);button.active=false;}
+            else{Boolean prior=muxiBurn$disabled.remove(button);if(prior!=null)button.active=prior;}
+        }
+        if(muxiBurn$source!=null)muxiBurn$source.active=!busy;
+        readOnlyButton.active=!busy;urlTextField.setEditable(!busy);
+        if(muxiBurn$localButton!=null)muxiBurn$localButton.active=!busy&&!muxiBurn$choosing;
+        if(muxiBurn$login!=null)muxiBurn$login.active=!muxiBurn$choosing&&(muxiBurn$job==null||!muxiBurn$job.running());
+        if(muxiBurn$session!=null){String automatic=muxiBurn$session.title(this);if(!automatic.isBlank()&&!automatic.equals(nameTextField.getValue()))nameTextField.setValue(automatic);}
+        if(muxiBurn$closed||muxiBurn$detail==null||muxiBurn$detail.getString().isBlank()
+                ||mouseX<muxiBurn$statusX||mouseX>=muxiBurn$statusX+muxiBurn$statusWidth
+                ||mouseY<muxiBurn$statusY||mouseY>=muxiBurn$statusY+font.lineHeight+2)return;
+        int textWidth=Math.max(1,Math.min(184,width-24));
+        var lines=font.split(muxiBurn$detail,textWidth);
+        int contentWidth=0;for(var line:lines)contentWidth=Math.max(contentWidth,font.width(line));
+        var occupied=muxiBurn$occupied;
+        if(occupied==null)return;
+        var box=BurnScreenRuntime.tooltipBox(width,height,occupied.x(),occupied.y(),occupied.width(),occupied.height(),
+                contentWidth+8,lines.size()*(font.lineHeight+1)+8);
+        if(box==null)return;
+        graphics.pose().pushPose();
+        try {
+            graphics.pose().translate(0,0,400);
+            graphics.fill(box.x(),box.y(),box.x()+box.width(),box.y()+box.height(),0xf0100010);
+            graphics.fill(box.x(),box.y(),box.x()+box.width(),box.y()+1,0xffbacbdc);
+            graphics.fill(box.x(),box.y()+box.height()-1,box.x()+box.width(),box.y()+box.height(),0xffbacbdc);
+            int lineY=box.y()+4;
+            for(var line:lines){graphics.drawString(font,line,box.x()+4,lineY,0xffeeeeee,false);lineY+=font.lineHeight+1;}
+        } finally {graphics.pose().popPose();}
     }
 }

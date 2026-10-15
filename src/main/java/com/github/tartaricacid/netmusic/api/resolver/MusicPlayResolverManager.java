@@ -39,17 +39,8 @@ public final class MusicPlayResolverManager {
     }
 
     public static CompletableFuture<ItemMusicCD.SongInfo> resolve(ItemMusicCD.SongInfo songInfo) {
-        for (IAsyncSongUrlResolver resolver : RESOLVERS) {
-            if (resolver.canResolve(songInfo)) {
-                return resolver.resolve(songInfo).handle((resolved, throwable) -> {
-                    if (throwable != null) {
-                        NetMusic.LOGGER.error("Song URL resolver {} failed", resolver.getClass().getName(), throwable);
-                        return songInfo;
-                    }
-                    return resolved;
-                });
-            }
-        }
-        return CompletableFuture.completedFuture(songInfo);
+        if (songInfo == null || !net.muxigame.musiccompat.burn.BurnProtocol.media(songInfo.songUrl))
+            return CompletableFuture.failedFuture(new IllegalArgumentException("oss_music_required"));
+        return CompletableFuture.completedFuture(songInfo.clone());
     }
 }

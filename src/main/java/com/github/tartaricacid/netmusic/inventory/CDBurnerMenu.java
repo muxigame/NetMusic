@@ -1,5 +1,10 @@
 package com.github.tartaricacid.netmusic.inventory;
 
+import net.muxigame.musiccompat.burn.BurnServer;
+import net.muxigame.musiccompat.burn.BurnLockedItemHandler;
+import net.muxigame.musiccompat.burn.BurnMenuAccess;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.inventory.ClickType;
 import com.github.tartaricacid.netmusic.init.InitItems;
 import com.github.tartaricacid.netmusic.item.ItemMusicCD;
 import net.minecraft.world.entity.player.Inventory;
@@ -14,15 +19,15 @@ import net.neoforged.neoforge.items.ItemStackHandler;
 import net.neoforged.neoforge.items.SlotItemHandler;
 import org.jetbrains.annotations.NotNull;
 
-public class CDBurnerMenu extends AbstractContainerMenu {
+public class CDBurnerMenu extends AbstractContainerMenu implements BurnMenuAccess {
     public static final MenuType<CDBurnerMenu> TYPE = IMenuTypeExtension.create((windowId, inv, data) -> new CDBurnerMenu(windowId, inv));
-    private final ItemStackHandler input = new ItemStackHandler() {
+    private ItemStackHandler input = new ItemStackHandler() {
         @Override
         public boolean isItemValid(int slot, @NotNull ItemStack stack) {
             return stack.getItem() == InitItems.MUSIC_CD.get();
         }
     };
-    private final ItemStackHandler output = new ItemStackHandler() {
+    private ItemStackHandler output = new ItemStackHandler() {
         @Override
         public boolean isItemValid(int slot, @NotNull ItemStack stack) {
             return false;
@@ -38,6 +43,9 @@ public class CDBurnerMenu extends AbstractContainerMenu {
     public CDBurnerMenu(int id, Inventory inventory) {
         super(TYPE, id);
 
+        // Wrap after all field initializers, including Playlist replacements, before slots capture them.
+        muxiBurn$wrapHandlers();
+
         this.addSlot(new SlotItemHandler(input, 0, 147, 14));
         this.addSlot(new SlotItemHandler(output, 0, 147, 67));
 
@@ -52,8 +60,15 @@ public class CDBurnerMenu extends AbstractContainerMenu {
         }
     }
 
+    private void muxiBurn$wrapHandlers() {
+        // Keep these writes outside <init>: Mixin locates field initializer writes there.
+        this.input = new BurnLockedItemHandler(this.input);
+        this.output = new BurnLockedItemHandler(this.output);
+    }
+
     @Override
     public ItemStack quickMoveStack(Player player, int index) {
+        if (BurnServer.locked(this)) return ItemStack.EMPTY;
         ItemStack itemStack = ItemStack.EMPTY;
         Slot slot = this.slots.get(index);
         if (slot != null && slot.hasItem()) {
@@ -84,12 +99,15 @@ public class CDBurnerMenu extends AbstractContainerMenu {
 
     @Override
     public void removed(Player player) {
+        if (player instanceof ServerPlayer server) BurnServer.menuClosed(server, this);
         super.removed(player);
         ItemHandlerHelper.giveItemToPlayer(player, input.getStackInSlot(0));
         ItemHandlerHelper.giveItemToPlayer(player, output.getStackInSlot(0));
+        if (player instanceof ServerPlayer) BurnServer.removed(this);
     }
 
     public void setSongInfo(ItemMusicCD.SongInfo setSongInfo) {
+        if (!BurnServer.verifiedWrite(this)) return;
         this.songInfo = setSongInfo;
         if (!this.input.getStackInSlot(0).isEmpty() && this.output.getStackInSlot(0).isEmpty()) {
             ItemStack itemStack = this.input.extractItem(0, 1, false);
@@ -103,5 +121,15 @@ public class CDBurnerMenu extends AbstractContainerMenu {
 
     public ItemStackHandler getInput() {
         return input;
+    }
+
+    @Override
+    public ItemStackHandler muxiBurn$output() { return output; }
+
+    @Override
+    public void clicked(int slot, int button, ClickType type, Player player) {
+        if (BurnServer.locked(this) && (slot == 0 || slot == 1 || type == ClickType.QUICK_MOVE
+                || type == ClickType.QUICK_CRAFT || type == ClickType.PICKUP_ALL)) return;
+        super.clicked(slot, button, type, player);
     }
 }

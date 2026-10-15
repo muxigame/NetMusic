@@ -26,3 +26,8 @@ run-data
 repo
 
 .ref
+
+# Local validation and private runtime inputs
+.local-validation/
+__pycache__/
+*.pyc

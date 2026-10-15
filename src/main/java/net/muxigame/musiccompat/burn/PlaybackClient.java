@@ -1,0 +1,26 @@
+package net.muxigame.musiccompat.burn;
+import com.github.tartaricacid.netmusic.client.audio.NetMusicSound;import com.github.tartaricacid.netmusic.item.ItemMusicCD;import com.github.tartaricacid.netmusic.tileentity.TileEntityMusicPlayer;
+import net.minecraft.client.Minecraft;import net.minecraft.core.BlockPos;import net.neoforged.neoforge.client.event.ClientTickEvent;import net.neoforged.neoforge.network.PacketDistributor;import java.util.*;
+public final class PlaybackClient {
+ private static final class Track{final PlaybackNetwork.State packet;PrivateSoundState state;final long expires;long lastAttempt;NetMusicSound sound;boolean authoritative;Track(PlaybackNetwork.State p){packet=p;state=new PrivateSoundState(p.seconds(),p.moving(),p.duration());authoritative=p.prepared();state.followPause=p.prepared()&&!p.moving();state.timelinePaused=state.followPause;expires=System.nanoTime()+PlaybackBudgets.PREPARATION_NANOS;}}
+ private static final Map<BlockPos,Track> tracks=new HashMap<>();private static Object connection;private static int ticks;private static boolean reportUnavailable;
+ public static void accept(PlaybackNetwork.State p){var mc=Minecraft.getInstance();if(mc.getConnection()==null)return;reset(mc);if(!BurnProtocol.uuid(p.epoch())||!BurnProtocol.media(p.reference())||p.duration()<1||p.duration()>14400||!Double.isFinite(p.seconds())||p.seconds()<0||p.seconds()>p.duration())return;
+  var old=tracks.get(p.pos());if(old!=null&&old.packet.epoch().equals(p.epoch())){if(!p.active()){stop(old);tracks.remove(p.pos());return;}old.state.updateTarget(p.seconds(),p.moving(),p.prepared());if(!old.authoritative&&p.prepared()){old.authoritative=true;if(old.state.ready&&Math.abs(old.state.seconds-p.seconds())>.5){stop(old);tracks.put(p.pos().immutable(),new Track(p));}}return;}if(!p.active())return;if(old!=null)stop(old);if(tracks.size()>=64)return;tracks.put(p.pos().immutable(),new Track(p));
+ }
+ private static void reset(Minecraft mc){if(connection!=mc.getConnection()){for(var t:tracks.values())stop(t);tracks.clear();connection=mc.getConnection();reportUnavailable=false;}}
+ private static void stop(Track t){t.state.cancel();if(t.sound!=null)((PrivateSoundAccess)t.sound).muxiPlayback$terminate();}
+ public static void tick(ClientTickEvent.Post event){var mc=Minecraft.getInstance();reset(mc);ticks++;var iterator=tracks.entrySet().iterator();while(iterator.hasNext()){var e=iterator.next();var t=e.getValue();if(t.state.cancelled||(!t.state.ready&&System.nanoTime()>t.expires)){MusicPlaybackMetrics.notice(t.packet.reference(),t.state.cancelled?"cancelled":"prepare_timeout");stop(t);iterator.remove();continue;}t.state.localPaused=((com.gly091020.netMusicListNeoforge.client.PauseSoundManager)mc.getSoundManager()).isPaused();if(mc.level==null){if(t.sound!=null){stop(t);iterator.remove();}continue;}
+  if(!mc.level.dimension().location().toString().equals(t.packet.dimension())){if(t.sound!=null){stop(t);iterator.remove();}continue;}
+  var block=mc.level.getBlockEntity(e.getKey());boolean matches=false;if(block!=null&&block.getClass()==TileEntityMusicPlayer.class){var tile=(TileEntityMusicPlayer)block;var song=ItemMusicCD.getSongInfo(tile.getPlayerInv().getStackInSlot(0));matches=tile.isPlay()&&song!=null&&t.packet.reference().equals(song.songUrl);}
+  if(t.sound==null){if(System.nanoTime()>t.expires){MusicPlaybackMetrics.notice(t.packet.reference(),"prepare_timeout");stop(t);iterator.remove();continue;}if(!matches||System.nanoTime()-t.lastAttempt<1_000_000_000L)continue;t.lastAttempt=System.nanoTime();try{var candidate=new NetMusicSound(e.getKey(),java.net.URI.create(t.packet.reference()).toURL(),t.packet.duration(),null);((PrivateSoundAccess)candidate).muxiPlayback$state(t.state);t.sound=candidate;mc.getSoundManager().play(candidate);
+   // play() registers its channel synchronously before starting the stream future.
+   // A muted/loading engine may decline it; retain the original bounded deadline.
+   if(mc.getSoundManager().isActive(candidate))t.sound=candidate;
+   else{var previous=t.state;var retry=new PrivateSoundState(previous.seekTarget(),previous.moving,previous.duration);retry.followPause=previous.followPause;retry.timelinePaused=previous.timelinePaused;retry.localPaused=previous.localPaused;((PrivateSoundAccess)candidate).muxiPlayback$terminate();previous.cancel();t.state=retry;t.sound=null;}
+  }catch(Exception error){stop(t);iterator.remove();}}
+  else if(!matches||t.sound.isStopped()||!((PrivateSoundAccess)t.sound).muxiPlayback$alive()){stop(t);iterator.remove();continue;}
+  if(t.state.ready&&ticks%10==0){var result=PlaybackDelivery.send(mc.getConnection(),mc.player!=null&&mc.level!=null,()->PacketDistributor.sendToServer(new PlaybackNetwork.Report(e.getKey(),t.packet.epoch(),t.state.seconds,!t.state.paused)),error->reportFailure());if(result!=PlaybackDelivery.Result.SENT&&result!=PlaybackDelivery.Result.CLOSED)reportFailure();}
+ }}
+ private static void reportFailure(){if(reportUnavailable)return;reportUnavailable=true;com.mojang.logging.LogUtils.getLogger().warn("Private music audio reporting unavailable for current connection");var mc=Minecraft.getInstance();if(mc.player!=null)mc.player.displayClientMessage(net.minecraft.network.chat.Component.literal("音乐同步失败，请更新整合包后重新连接。"),false);}
+ private PlaybackClient(){}
+}

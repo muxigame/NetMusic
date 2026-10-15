@@ -1,0 +1,17 @@
+import net.muxigame.musiccompat.qa.entry042.*;import net.muxigame.musiccompat.burn.*;import java.net.*;import java.net.http.*;import java.util.*;import java.util.concurrent.*;
+public class QA10Probe {
+ static int checks;static void check(boolean ok){checks++;if(!ok)throw new AssertionError();}
+ static HttpRequest get(String url){return HttpRequest.newBuilder(URI.create(url)).GET().build();}
+ static void refused(HttpRequest request)throws Exception{try{Entry042PlaybackTransport.stableReference(request);throw new AssertionError("guard accepted");}catch(java.io.IOException expected){check(expected.getMessage().equals("owned_signed_media_required"));}}
+ public static void main(String[] ignored)throws Exception {
+ String stable=BurnProtocol.OSS.resolve("media/10000/00000000-0000-4000-8000-000000000042.wav").toString();String query="?x-oss-signature-version=OSS4-HMAC-SHA256&x-oss-credential=fixture%2Fcn-hangzhou%2Foss%2Faliyun_v4_request&x-oss-date=20261014T000000Z&x-oss-expires=600&x-oss-signature="+"a".repeat(64)+"&x-oss-security-token=owned-fixture";
+ check(Entry042PlaybackTransport.stableReference(get(stable+query)).toString().equals(stable));
+ refused(get(stable));refused(HttpRequest.newBuilder(URI.create(stable+query)).POST(HttpRequest.BodyPublishers.noBody()).build());refused(get(stable.replace("https:","http:")+query));refused(get(stable.replace(BurnProtocol.OSS.getHost(),"example.test")+query));refused(get(stable+query+"#fragment"));refused(get(stable+query+"&extra=unsafe"));refused(get(stable+query+"&x-oss-expires=300"));refused(get(stable+query.replace("x-oss-expires=600","x-oss-expires=721")));refused(get(stable+query.replace("a".repeat(64),"bad-signature")));refused(get(stable.replace("/media/","/media%2F")+query));
+ var pending=new CompletableFuture<Object>();Entry042PlaybackDiagnostics.lyric(URI.create(stable),pending);var first=Entry042PlaybackDiagnostics.snapshot();check(((List<?>)first.get("lyrics")).size()==1);check(((Map<?,?>)((List<?>)first.get("lyrics")).getFirst()).get("status").equals("pending"));pending.complete(new Object());var second=Entry042PlaybackDiagnostics.snapshot();check(((Map<?,?>)((List<?>)second.get("lyrics")).getFirst()).get("status").equals("completed-lyrics"));
+ var cancelled=new CompletableFuture<Object>();Entry042PlaybackDiagnostics.lyric(URI.create(stable),cancelled);cancelled.cancel(false);check(((Map<?,?>)((List<?>)Entry042PlaybackDiagnostics.snapshot().get("lyrics")).getLast()).get("status").equals("cancelled"));
+ Entry042PlaybackDiagnostics.account(false,false);Entry042PlaybackDiagnostics.account(true,true);var counters=Entry042PlaybackDiagnostics.snapshot();check(counters.get("accountStarted").equals(1L)&&counters.get("accountReturned").equals(1L));
+ for(int i=0;i<200;i++)Entry042PlaybackDiagnostics.event("bounded-observation",Map.of("sequence",i));var events=(List<?>)Entry042PlaybackDiagnostics.snapshot().get("events");check(events.size()==180);check(((Map<?,?>)events.getFirst()).get("sequence").equals(20));
+ for(int i=0;i<200;i++)Entry042PlaybackDiagnostics.lyric(URI.create(stable),CompletableFuture.completedFuture(null));var lyrics=(List<?>)Entry042PlaybackDiagnostics.snapshot().get("lyrics");check(lyrics.size()==180);check(((Map<?,?>)lyrics.getLast()).get("status").equals("completed-empty"));
+ check(!Entry042PlaybackDiagnostics.snapshot().toString().contains("x-oss-security-token"));System.out.println("{\"checks\":"+checks+",\"networkCalls\":0,\"mcStarted\":false}");
+ }
+}

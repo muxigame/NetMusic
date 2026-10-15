@@ -1,0 +1,17 @@
+{
+  "upstream": "https://github.com/TartaricAcid/NetMusic.git",
+  "upstreamBranch": "1.21",
+  "upstreamCommit": "b44ee583db5f946229c08371aac99aeae166c31d",
+  "fork": "https://github.com/muxigame/NetMusic",
+  "licenseDocumentationCommit": "b7cc0dfc33253c056089e87d36d9c6dca8fdc21b",
+  "integratedSource": "muxi-auth/music-compat current candidate12",
+  "integratedCandidateSha256": "de46515ff557bf6a46c28600a13a12ba57fa5a08cf3ff13ac62325387d1e0a88",
+  "migrationStatus": "integrated-native-validated",
+  "productVersion": "1.5.2-muxi.1+mc1.21.1",
+  "productSha256": "dc1e451f210d8471930a3e0f15751daaf6d8a0b393bca34385e16b7648c0f5d4",
+  "sourceBuild": "source-build-9",
+  "selfTargetMixinsRemoved": 11,
+  "externalMixinsRetained": 5,
+  "originalBusinessClassesCopied": 0,
+  "legacyModuleRetired": true
+}

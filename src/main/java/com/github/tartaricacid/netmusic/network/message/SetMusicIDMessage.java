@@ -1,6 +1,7 @@
 package com.github.tartaricacid.netmusic.network.message;
 
 import com.github.tartaricacid.netmusic.NetMusic;
+import net.muxigame.musiccompat.burn.BurnServer;
 import com.github.tartaricacid.netmusic.inventory.CDBurnerMenu;
 import com.github.tartaricacid.netmusic.inventory.ComputerMenu;
 import com.github.tartaricacid.netmusic.item.ItemMusicCD;
@@ -23,6 +24,8 @@ public record SetMusicIDMessage(ItemMusicCD.SongInfo song) implements CustomPack
                 if (!(context.player() instanceof ServerPlayer sender)) {
                     return;
                 }
+                // Reject unverified legacy packets before third-party menu injections run.
+                if (!BurnServer.verifiedWrite(sender.containerMenu)) return;
                 if (sender.containerMenu instanceof CDBurnerMenu menu) {
                     menu.setSongInfo(message.song());
                     return;

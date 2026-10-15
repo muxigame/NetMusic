@@ -1,0 +1,18 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "compatibilityLevel": "JAVA_21",
+  "package": "net.muxigame.musiccompat.mixin",
+  "mixins": [
+    "BurnPlayerListAccess",
+    "OssEnderMixin"
+  ],
+  "client": [
+    "NativeChooserFocusMixin",
+    "PrivateChannelClockMixin",
+    "PrivateSoundEngineStreamMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

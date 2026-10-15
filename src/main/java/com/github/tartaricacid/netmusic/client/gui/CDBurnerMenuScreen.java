@@ -1,5 +1,9 @@
 package com.github.tartaricacid.netmusic.client.gui;
 
+import net.minecraft.client.gui.Font;
+import net.minecraft.network.chat.FormattedText;
+import net.muxigame.musiccompat.burn.BurnCoordinator;
+import net.muxigame.musiccompat.burn.BurnScreenRuntime;
 import com.github.tartaricacid.netmusic.NetMusic;
 import com.github.tartaricacid.netmusic.config.MusicListManage;
 import com.github.tartaricacid.netmusic.inventory.CDBurnerMenu;
@@ -44,6 +48,7 @@ public class CDBurnerMenuScreen extends AbstractContainerScreen<CDBurnerMenu> {
 
     @Override
     protected void init() {
+        muxiBurn$preserve();
         super.init();
 
         String perText = "";
@@ -96,60 +101,14 @@ public class CDBurnerMenuScreen extends AbstractContainerScreen<CDBurnerMenu> {
 
         this.readOnlyButton = Checkbox.builder(Component.translatable("gui.netmusic.cd_burner.read_only"), font).pos(leftPos + 66, topPos + 34).maxWidth(80).selected(false).build();
         this.addRenderableWidget(this.readOnlyButton);
-        this.addRenderableWidget(Button.builder(Component.translatable("gui.netmusic.cd_burner.craft"), (b) -> handleCraftButton())
+        this.addRenderableWidget(Button.builder(Component.translatable("gui.netmusic.cd_burner.craft"), (b) -> muxiBurn$link())
                 .pos(leftPos + 7, topPos + 35).size(55, 18).build());
+        muxiBurn$init();
     }
 
+    /** Kept as an addon/QA ABI; the actual widget calls the verified path directly. */
     private void handleCraftButton() {
-        ItemStack cd = this.getMenu().getInput().getStackInSlot(0);
-        if (cd.isEmpty()) {
-            this.tips = Component.translatable("gui.netmusic.cd_burner.cd_is_empty");
-            return;
-        }
-        ItemMusicCD.SongInfo songInfo = ItemMusicCD.getSongInfo(cd);
-        if (songInfo != null && songInfo.readOnly) {
-            this.tips = Component.translatable("gui.netmusic.cd_burner.cd_read_only");
-            return;
-        }
-        if (StringUtils.isBlank(textField.getValue())) {
-            this.tips = Component.translatable("gui.netmusic.cd_burner.no_music_id");
-            return;
-        }
-        Matcher djMatcher = DJ_ID_REG.matcher(textField.getValue());
-        if (djMatcher.find()) {
-            long djId = Long.parseLong(djMatcher.group(1));
-            try {
-                ItemMusicCD.SongInfo djSong = MusicListManage.getDjSong(djId);
-                if (StringUtils.isBlank(djSong.songUrl) || StringUtils.isBlank(djSong.songName)) {
-                    this.tips = Component.translatable("gui.netmusic.cd_burner.get_info_error");
-                    return;
-                }
-                djSong.readOnly = this.readOnlyButton.selected();
-                NetworkHandler.sendToServer(new SetMusicIDMessage(djSong));
-                return;
-            } catch (Exception e) {
-                this.tips = Component.translatable("gui.netmusic.cd_burner.get_info_error");
-                NetMusic.LOGGER.error("Failed to get DJ song info for CD burner, dj id: {}", djId, e);
-                return;
-            }
-        }
-        if (ID_REG.matcher(textField.getValue()).matches()) {
-            long id = Long.parseLong(textField.getValue());
-            try {
-                ItemMusicCD.SongInfo song = MusicListManage.get163Song(id);
-                if (StringUtils.isBlank(song.songUrl) || StringUtils.isBlank(song.songName)) {
-                    this.tips = Component.translatable("gui.netmusic.cd_burner.get_info_error");
-                    return;
-                }
-                song.readOnly = this.readOnlyButton.selected();
-                NetworkHandler.sendToServer(new SetMusicIDMessage(song));
-            } catch (Exception e) {
-                this.tips = Component.translatable("gui.netmusic.cd_burner.get_info_error");
-                NetMusic.LOGGER.error("Failed to get song info for CD burner, song id: {}", id, e);
-            }
-        } else {
-            this.tips = Component.translatable("gui.netmusic.cd_burner.music_id_error");
-        }
+        muxiBurn$link();
     }
 
     @Override
@@ -170,8 +129,9 @@ public class CDBurnerMenuScreen extends AbstractContainerScreen<CDBurnerMenu> {
         if (StringUtils.isBlank(textField.getValue()) && !textField.isFocused()) {
             graphics.drawString(font, Component.translatable("gui.netmusic.cd_burner.id.tips").withStyle(ChatFormatting.ITALIC), this.leftPos + 12, this.topPos + 18, ChatFormatting.GRAY.getColor(), false);
         }
-        graphics.drawWordWrap(font, tips, this.leftPos + 8, this.topPos + 57, 135, 0xCF0000);
+        muxiBurn$status(graphics, font, tips, this.leftPos + 8, this.topPos + 57, 135, 0xCF0000);
         renderTooltip(graphics, x, y);
+        muxiBurn$detail(graphics, x, y, partialTicks);
     }
 
     @Override
@@ -207,5 +167,121 @@ public class CDBurnerMenuScreen extends AbstractContainerScreen<CDBurnerMenu> {
         } else {
             this.textField.insertText(text);
         }
+    }
+
+    // Integrated verified burn UI: no injection into NetMusic classes.
+
+    private BurnCoordinator muxiBurn$job;
+    private Button muxiBurn$login;
+    private Button muxiBurn$cancel;
+    private final java.util.Map<Button,Boolean> muxiBurn$disabled=new java.util.IdentityHashMap<>();
+    private String muxiBurn$restoreInput;
+    private Boolean muxiBurn$restoreReadOnly;
+    private BurnScreenRuntime.Session muxiBurn$session;
+    private boolean muxiBurn$closed;
+    private boolean muxiBurn$choosing;
+    private long muxiBurn$screenGeneration;
+    private Button muxiBurn$localButton;
+    private Component muxiBurn$detail;
+    private String muxiBurn$detailSummary="";
+    private int muxiBurn$statusX,muxiBurn$statusY,muxiBurn$statusWidth;
+
+    private void muxiBurn$preserve(){muxiBurn$restoreInput=textField==null?null:textField.getValue();muxiBurn$restoreReadOnly=readOnlyButton==null?null:readOnlyButton.selected();}
+    private void muxiBurn$init() {
+        // A resize/recovery reinitializes the same open menu. Keep its pending
+        // native selection alive; removed() invalidates genuinely old menus.
+        if(muxiBurn$closed||muxiBurn$screenGeneration==0){muxiBurn$screenGeneration++;muxiBurn$choosing=false;}
+        muxiBurn$closed=false;
+        muxiBurn$session=BurnScreenRuntime.session();
+        if(muxiBurn$session==null)return;
+        textField.setMaxLength(2048);if(muxiBurn$restoreInput!=null)textField.setValue(muxiBurn$restoreInput);muxiBurn$restoreInput=null;
+        if(muxiBurn$restoreReadOnly!=null&&readOnlyButton.selected()!=muxiBurn$restoreReadOnly)readOnlyButton.onPress();muxiBurn$restoreReadOnly=null;
+        addRenderableWidget(Checkbox.builder(Component.literal("确认"),font).pos(leftPos+8,topPos-24).maxWidth(52).selected(muxiBurn$session.permissionConfirmed(this)).onValueChange((box,value)->muxiBurn$session.confirmation(this,value)).build());
+        var login=BurnScreenRuntime.burnerLogin(width,leftPos,topPos,imageWidth);
+        muxiBurn$login=addRenderableWidget(Button.builder(Component.literal("登录"),button->muxiBurn$session.login(this,textField.getValue())).bounds(login.x(),login.y(),login.width(),20).build());
+        if(muxiBurn$job==null) muxiBurn$job=muxiBurn$session.open(this,
+            progress -> {if(!muxiBurn$closed){tips=BurnScreenRuntime.text(progress);muxiBurn$detailSummary=tips.getString();muxiBurn$detail=BurnScreenRuntime.detail(progress);}});
+        if(muxiBurn$job.running()){
+            boolean frozen=muxiBurn$session.readOnlySelected(this);
+            if(readOnlyButton.selected()!=frozen)readOnlyButton.onPress();
+            String input=muxiBurn$session.activeInput(this);if(!input.isBlank())textField.setValue(input);
+        }
+        muxiBurn$localButton=addRenderableWidget(Button.builder(Component.literal("本地刻录"),button -> {
+            if(muxiBurn$choosing)return;
+            if(!muxiBurn$session.permissionConfirmed(this)){tips=Component.literal("请确认刻录");return;}
+            var original=this;
+            long selectionGeneration=muxiBurn$screenGeneration;
+            muxiBurn$choosing=true;button.active=false;
+            try {
+                boolean started=muxiBurn$session.chooseLocalOnce(selected -> Minecraft.getInstance().execute(() -> {
+                    if(!BurnScreenRuntime.selectionCurrent(selectionGeneration,muxiBurn$screenGeneration,
+                            muxiBurn$closed,Minecraft.getInstance().screen==original))return;
+                    muxiBurn$choosing=false;if(muxiBurn$localButton!=null)muxiBurn$localButton.active=true;
+                    if(selected==null){tips=Component.empty();return;}
+                    muxiBurn$start(muxiBurn$session.local(this,selected));
+                }));
+                if(!started){muxiBurn$choosing=false;button.active=true;tips=Component.literal("文件选择器已打开");}
+            } catch(RuntimeException unavailable) {
+                muxiBurn$choosing=false;button.active=true;tips=Component.literal("文件选择器暂不可用");
+            }
+        }).bounds(leftPos+64,topPos-24,52,20).build());
+        muxiBurn$localButton.active=!muxiBurn$choosing;
+        muxiBurn$cancel=addRenderableWidget(Button.builder(Component.literal("取消刻录"),button -> muxiBurn$job.cancel())
+            .bounds(leftPos+120,topPos-24,52,20).build());
+    }
+    private void muxiBurn$link() {
+        // The original widget enters here directly, before third-party craft injectors.
+        if(muxiBurn$session==null){tips=Component.literal("音乐服务尚未就绪");return;}
+        if(muxiBurn$choosing){tips=Component.literal("请先完成文件选择");return;}
+        if(!muxiBurn$session.prepareLink(this,textField.getValue()))return;
+        if(!muxiBurn$session.permissionConfirmed(this)){tips=Component.literal("请确认刻录");return;}
+        try {muxiBurn$start(muxiBurn$session.link(this,textField.getValue()));}
+        catch(RuntimeException invalid){tips=Component.literal("音频链接无效");}
+    }
+    private void muxiBurn$start(BurnCoordinator.Source source) {
+        muxiBurn$session.readOnly(this,readOnlyButton.selected());
+        try {muxiBurn$job.start(source,muxiBurn$session.commit(this));}
+        catch(IllegalStateException busy){tips=Component.literal("正在刻录，请等待或取消");}
+    }
+    @Override public void removed() {
+        muxiBurn$closed=true;muxiBurn$screenGeneration++;muxiBurn$choosing=false;
+        muxiBurn$job=null;if(muxiBurn$session!=null)muxiBurn$session.closed(this);super.removed();
+    }
+    /** Pinned upstream renders tips at left+8/top+57, width135, immediately
+     * above the platform buttons at top+70. Replacing its wrap keeps one row.
+     */
+    private void muxiBurn$status(GuiGraphics graphics,Font currentFont,FormattedText text,int x,int y,int rowWidth,int color) {
+        String full=text.getString();
+        if(!full.equals(muxiBurn$detailSummary)){muxiBurn$detailSummary=full;muxiBurn$detail=Component.literal(full);}
+        muxiBurn$statusX=x;muxiBurn$statusY=y;muxiBurn$statusWidth=rowWidth;
+        graphics.drawString(currentFont,BurnScreenRuntime.singleLine(full,rowWidth,currentFont::width),x,y,color,false);
+    }
+    private void muxiBurn$detail(GuiGraphics graphics,int mouseX,int mouseY,float delta) {
+        boolean busy=muxiBurn$job!=null&&muxiBurn$job.running();
+        for(var child:children())if(child instanceof Button button&&button!=muxiBurn$cancel&&!BurnScreenRuntime.closeControl(button.getMessage().getString())){
+            if(busy){muxiBurn$disabled.putIfAbsent(button,button.active);button.active=false;}
+            else{Boolean prior=muxiBurn$disabled.remove(button);if(prior!=null)button.active=prior;}
+        }
+        readOnlyButton.active=!busy;textField.setEditable(!busy);
+        if(muxiBurn$localButton!=null)muxiBurn$localButton.active=!busy&&!muxiBurn$choosing;
+        if(muxiBurn$login!=null)muxiBurn$login.active=!muxiBurn$choosing&&(muxiBurn$job==null||!muxiBurn$job.running());
+        if(muxiBurn$closed||muxiBurn$detail==null||muxiBurn$detail.getString().isBlank()
+                ||mouseX<muxiBurn$statusX||mouseX>=muxiBurn$statusX+muxiBurn$statusWidth
+                ||mouseY<muxiBurn$statusY||mouseY>=muxiBurn$statusY+font.lineHeight+2)return;
+        int textWidth=Math.max(1,Math.min(184,width-24));
+        var lines=font.split(muxiBurn$detail,textWidth);
+        int contentWidth=0;for(var line:lines)contentWidth=Math.max(contentWidth,font.width(line));
+        var box=BurnScreenRuntime.tooltipBox(width,height,leftPos,topPos-24,imageWidth,imageHeight+24,
+                contentWidth+8,lines.size()*(font.lineHeight+1)+8);
+        if(box==null)return;
+        graphics.pose().pushPose();
+        try {
+            graphics.pose().translate(0,0,400);
+            graphics.fill(box.x(),box.y(),box.x()+box.width(),box.y()+box.height(),0xf0100010);
+            graphics.fill(box.x(),box.y(),box.x()+box.width(),box.y()+1,0xffbacbdc);
+            graphics.fill(box.x(),box.y()+box.height()-1,box.x()+box.width(),box.y()+box.height(),0xffbacbdc);
+            int lineY=box.y()+4;
+            for(var line:lines){graphics.drawString(font,line,box.x()+4,lineY,0xffeeeeee,false);lineY+=font.lineHeight+1;}
+        } finally {graphics.pose().popPose();}
     }
 }

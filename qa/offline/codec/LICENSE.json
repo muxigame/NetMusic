@@ -1,0 +1,17 @@
+{
+  "license": "CC0-1.0",
+  "author": "Self-authored by this QA task",
+  "source": "Generated two-channel 440Hz/660Hz sine formula; no external music, account or user audio",
+  "seconds": 0.5,
+  "frames": 22050,
+  "fixtures": {
+    "self-authored-0.5s.wav": {
+      "bytes": 88244,
+      "sha256": "4149371304b24b9e220f87cb37bea76aa3a6ab6d89376bfe2872c589e9921bb9"
+    },
+    "self-authored-0.5s.mp3": {
+      "bytes": 9238,
+      "sha256": "39dad6f0199654685b1397536b234226620ccda762a098ee4994bcc2de98b87a"
+    }
+  }
+}
